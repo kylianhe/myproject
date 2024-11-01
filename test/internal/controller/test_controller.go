@@ -33,6 +33,9 @@ import (
 
 var logger = log.Log.WithName("test_controller")
 
+var deploymentInfo = make(map[string]apiv1alpha1.DeploymentInfo)
+var annotation = make(map[string]string)
+
 // TestReconciler reconciles a Test object
 type TestReconciler struct {
 	client.Client
@@ -73,7 +76,7 @@ func (r *TestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	if currenHour >= startTime && currenHour <= endTime {
 		logger.Info("Start to call testdepployment")
-		err := testdepployment(test, r, ctx, *replicaes)
+		err := testdepployment(test, r, ctx, replicaes)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -97,7 +100,61 @@ func testdepployment(test *apiv1alpha1.Test, r *TestReconciler, ctx context.Cont
 			deploymentnew.Spec.Replicas = &replicas
 			err := r.Update(ctx, deploymentnew)
 			if err != nil {
+				test.Status.Status = apiv1alpha1.Failed
+				err := r.Status().Update(ctx, test)
+				if err != nil {
+					return err
+				}
 				return err
+			}
+
+			test.Status.Status = apiv1alpha1.Success
+			err = r.Status().Update(ctx, test)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func addAnnotations(test *apiv1alpha1.Test, r *TestReconciler, ctx context.Context) error {
+
+	// get deploymentinfo from deployment and save it in originalDeploymentInfo
+	for _, deploy := range test.Spec.Deployments {
+		doploymentnew := &v1.Deployment{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: deploy.Namespace, Name: deploy.Name}, doploymentnew); err != nil {
+			return err
+		}
+
+		if *doploymentnew.Spec.Replicas != test.Spec.Replicas {
+			logger.Info("Deployment replicas not equal to test replicas")
+			deploymentInfo[deploymentnew.Name] = apiv1alpha1.DeploymentInfo{
+				Replicas:  *doploymentnew.Spec.Replicas,
+				Namespace: deploymentnew.Namespace,
+			}
+		}
+	}
+
+	return nil
+}
+
+func addAnnotations(test *apiv1alpha1.Test, r *TestReconciler, ctx context.Context) error {
+
+	// get deploymentinfo and add annotations
+	for _, deploy := range test.Spec.Deployments {
+		deploymentnew := &v1.Deployment{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: deploy.Namespace, Name: deploy.Name}, deploymentnew); err != nil {
+			return err
+		}
+
+		// add annotations to deployment
+		if *deploymentnew.Spec.Replicas != test.Spec.Replicas {
+			logger.Info("Add annotations to deployment")
+			deploymentInfo[deploymentnew.Name] = apiv1alpha1.DeploymentInfo{
+				Namespace: deploymentnew.Namespace,
+				Replicas:  *deploymentnew.Spec.Replicas,
 			}
 		}
 	}

@@ -20,8 +20,20 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+const (
+	Success = "Success"
+	Failed  = "Failed"
+	Pending = "Pending"
+	Restore = "Restore"
+)
+
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+
+type DeploymentInfo struct {
+	Replicas  int32  `json:"replicas"`
+	Namespace string `json:"namespace"`
+}
 
 type NamespacedName struct {
 	Name      string `json:"name"`
@@ -35,10 +47,16 @@ type TestSpec struct {
 
 	// Foo is an example field of Test. Edit test_types.go to remove/update
 
-	StartTime   int              `json:"start,omitempty"`
-	EndTime     int              `json:"end,omitempty"`
-	Replicas    *int32           `json:"replicas,omitempty"`
-	Deployments []NamespacedName `json:"deployments,omitempty"`
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=23
+	// +kubebuilder:validation:Required
+	StartTime int `json:"start"`
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=23
+	// +kubebuilder:validation:Required
+	EndTime     int              `json:"end"`
+	Replicas    int32            `json:"replicas"`
+	Deployments []NamespacedName `json:"deployments"`
 }
 
 // TestStatus defines the observed state of Test
@@ -46,10 +64,12 @@ type TestStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
+	Status string `json:"status"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Status",type=string,JSONPath=".status.status"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // Test is the Schema for the tests API
