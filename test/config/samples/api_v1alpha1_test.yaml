@@ -1,0 +1,17 @@
+apiVersion: api.kylian.test.com/v1alpha1
+kind: Test
+metadata:
+  labels:
+    app.kubernetes.io/name: test
+    app.kubernetes.io/managed-by: kustomize
+  name: test-sample
+spec:
+  startTime: "2024-11-01T13:00:01Z"
+  endTime: "2024-11-01T14:00:00Z"
+  replicas: 3
+  deployments:
+    - name: test-nginx-1
+      namespace: default
+    - name: test-nginx-2
+      namespace: default
+  # TODO(user): Add fields here
