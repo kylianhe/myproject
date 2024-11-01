@@ -21,6 +21,8 @@ import (
 	"fmt"
 	v1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/json"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -30,6 +32,8 @@ import (
 
 	apiv1alpha1 "github.com/myporject/test/api/v1alpha1"
 )
+
+const finalizer = "test.kylian.test.com/finalizer"
 
 var logger = log.Log.WithName("test_controller")
 
@@ -67,22 +71,95 @@ func (r *TestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	startTime := test.Spec.StartTime
-	endTime := test.Spec.EndTime
-	replicaes := test.Spec.Replicas
-
-	currenHour := time.Now().Local().Hour()
-	logger.Info(fmt.Sprintf("Current hour: %d", currenHour))
-
-	if currenHour >= startTime && currenHour <= endTime {
-		logger.Info("Start to call testdepployment")
-		err := testdepployment(test, r, ctx, replicaes)
-		if err != nil {
-			return ctrl.Result{}, err
+	if test.ObjectMeta.DeletionTimestamp.IsZero() {
+		if !controllerutil.ContainsFinalizer(test, finalizer) {
+			controllerutil.AddFinalizer(test, finalizer)
+			logger.Info("Add finalizer", finalizer)
+			err := r.Update(ctx, test)
+			if err != nil {
+				return ctrl.Result{}, client.IgnoreNotFound(err)
+			}
 		}
+
+		if test.Status.Status == "" {
+			test.Status.Status = apiv1alpha1.Pending
+			err := r.Status().Update(ctx, test)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+
+			if err := addAnnotations(test, r, ctx); err != nil {
+				return ctrl.Result{}, client.IgnoreNotFound(err)
+			}
+
+		}
+
+		startTime := test.Spec.StartTime
+		endTime := test.Spec.EndTime
+		replicaes := test.Spec.Replicas
+
+		currenHour := time.Now().Local().Hour()
+		logger.Info(fmt.Sprintf("Current hour: %d", currenHour))
+
+		if currenHour >= startTime && currenHour <= endTime {
+			if test.Status.Status != apiv1alpha1.Success {
+				logger.Info("Start to call testdepployment")
+				err := testdepployment(test, r, ctx, replicaes)
+				if err != nil {
+					return ctrl.Result{}, err
+				}
+			}
+		} else {
+			if test.Status.Status == apiv1alpha1.Success {
+				err := restoredeployment(test, r, ctx)
+				if err != nil {
+					return ctrl.Result{}, err
+				}
+			}
+		}
+	} else {
+		logger.Info("Deleting test resource")
+		if test.Status.Status == apiv1alpha1.Success {
+			err := restoredeployment(test, r, ctx)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			logger.Info("Remove finalizer")
+			controllerutil.RemoveFinalizer(test, finalizer)
+		}
+
+		logger.Info("Delete test resource")
 	}
 
 	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+}
+
+func restoredeployment(test *apiv1alpha1.Test, r *TestReconciler, ctx context.Context) error {
+
+	logger.Info("Restore deployment")
+	for name, deployInfo := range deploymentInfo {
+		deploymentnew := &v1.Deployment{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: deployInfo.Namespace, Name: name}, deploymentnew); err != nil {
+			return err
+		}
+
+		if deploymentnew.Spec.Replicas != &deployInfo.Replicas {
+			logger.Info("Restore deployment replicas")
+			deploymentnew.Spec.Replicas = &deployInfo.Replicas
+			err := r.Update(ctx, deploymentnew)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	test.Status.Status = apiv1alpha1.Restore
+	err := r.Status().Update(ctx, test)
+	if err != nil {
+
+	}
+
+	return nil
 }
 
 func testdepployment(test *apiv1alpha1.Test, r *TestReconciler, ctx context.Context, replicas int32) error {
@@ -121,27 +198,6 @@ func testdepployment(test *apiv1alpha1.Test, r *TestReconciler, ctx context.Cont
 
 func addAnnotations(test *apiv1alpha1.Test, r *TestReconciler, ctx context.Context) error {
 
-	// get deploymentinfo from deployment and save it in originalDeploymentInfo
-	for _, deploy := range test.Spec.Deployments {
-		doploymentnew := &v1.Deployment{}
-		if err := r.Get(ctx, types.NamespacedName{Namespace: deploy.Namespace, Name: deploy.Name}, doploymentnew); err != nil {
-			return err
-		}
-
-		if *doploymentnew.Spec.Replicas != test.Spec.Replicas {
-			logger.Info("Deployment replicas not equal to test replicas")
-			deploymentInfo[deploymentnew.Name] = apiv1alpha1.DeploymentInfo{
-				Replicas:  *doploymentnew.Spec.Replicas,
-				Namespace: deploymentnew.Namespace,
-			}
-		}
-	}
-
-	return nil
-}
-
-func addAnnotations(test *apiv1alpha1.Test, r *TestReconciler, ctx context.Context) error {
-
 	// get deploymentinfo and add annotations
 	for _, deploy := range test.Spec.Deployments {
 		deploymentnew := &v1.Deployment{}
@@ -157,6 +213,24 @@ func addAnnotations(test *apiv1alpha1.Test, r *TestReconciler, ctx context.Conte
 				Replicas:  *deploymentnew.Spec.Replicas,
 			}
 		}
+	}
+
+	for deploymentName, info := range deploymentInfo {
+
+		infoJson, err := json.Marshal(info)
+		if err != nil {
+			return err
+		}
+
+		// add annotations to deployment
+		annotation[deploymentName] = string(infoJson)
+	}
+
+	// update annotations to test resource
+	test.ObjectMeta.Annotations = annotation
+	err := r.Update(ctx, test)
+	if err != nil {
+		return err
 	}
 
 	return nil
